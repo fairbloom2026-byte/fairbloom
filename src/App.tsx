@@ -56,7 +56,8 @@ const pageMeta: Record<Page, { label: string; description: string }> = {
   // "listings" and "review" are the two tabs of one Review queue page.
   listings: {
     label: "Review queue",
-    description: "New flower posts stay hidden from farmers and buyers until you approve them.",
+    description:
+      "Posts priced far above or below the market price stay hidden until you review them.",
   },
   review: {
     label: "Review queue",
@@ -596,7 +597,7 @@ function NotificationBell({ onNavigate }: { onNavigate: (page: Page) => void }) 
             <EmptyState
               icon={Bell}
               title="No notifications"
-              body="New listings, verifications and flagged sales will appear here."
+              body="Flagged listings, verifications and flagged sales will appear here."
             />
           ) : null}
         </section>
@@ -697,7 +698,7 @@ function Overview({
       </div>
       <div className="metric-grid">
         <MetricCard
-          label="Listings to approve"
+          label="Flagged listings"
           value={loading ? "—" : (data?.pendingListings ?? 0)}
           icon={Store}
           accent="green"
@@ -848,7 +849,7 @@ function ReviewQueue({
   }, [version]);
 
   const tabs = [
-    { page: "listings" as const, label: "New listings", icon: Store, count: counts?.listings },
+    { page: "listings" as const, label: "Flagged listings", icon: Store, count: counts?.listings },
     {
       page: "review" as const,
       label: "Flagged sales",
@@ -1255,7 +1256,7 @@ function ListingsReviewPage({
             className={status === value ? "filter-tab active" : "filter-tab"}
             onClick={() => chooseStatus(value)}
           >
-            {value === "pending" ? "Waiting approval" : capitalize(value)}
+            {value === "pending" ? "Waiting review" : capitalize(value)}
           </button>
         ))}
         <button
@@ -1293,11 +1294,11 @@ function ListingsReviewPage({
       ) : !error ? (
         <EmptyState
           icon={Store}
-          title={status === "pending" ? "No listings waiting" : `No ${status} listings`}
+          title={status === "pending" ? "No flagged listings" : `No ${status} listings`}
           body={
             status === "pending"
-              ? "New flower posts from farmers and buyers will appear here for approval."
-              : `There are no ${status} listings.`
+              ? "Listings priced far above or below the market price will appear here."
+              : `No flagged listings have been ${status} yet.`
           }
         />
       ) : null}
@@ -1309,8 +1310,8 @@ function ListingsReviewPage({
         >
           <form className="stack-md" onSubmit={submitRejection}>
             <p className="muted">
-              The listing stays hidden from the marketplace. The member sees this reason in the app
-              and can edit the listing to send it back for review.
+              The listing stays hidden from the marketplace. The member sees this reason in the app;
+              once they fix the price it goes live again.
             </p>
             <label className="field">
               <span>
@@ -1416,6 +1417,17 @@ function ListingReviewCard({
           {item.location}
           {item.status !== "active" ? <span>{capitalize(item.status)}</span> : null}
         </div>
+        {item.priceDeviationPercent != null && item.marketVwapAtCheck != null ? (
+          <p
+            className={`price-flag ${item.priceDeviationPercent > 0 ? "price-flag-above" : "price-flag-below"}`}
+          >
+            <strong>
+              {formatNumber(Math.abs(item.priceDeviationPercent))}%{" "}
+              {item.priceDeviationPercent > 0 ? "above" : "below"} market
+            </strong>
+            <span>Market price {formatCurrency(item.marketVwapAtCheck)} per dozen</span>
+          </p>
+        ) : null}
         {item.description ? <p className="listing-description">{item.description}</p> : null}
         {item.reviewNote ? <p className="review-note">{item.reviewNote}</p> : null}
         <p className="submitted-date">

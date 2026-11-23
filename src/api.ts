@@ -74,8 +74,11 @@ export interface ReviewListing {
   description?: string;
   imageUrl: string | null;
   status: "active" | "fulfilled" | "cancelled";
-  /** Missing on listings posted before moderation existed (they count as approved). */
+  /** "pending" = flagged by the price check and hidden until reviewed. */
   reviewStatus?: ListingReviewStatus;
+  /** Signed % from the market VWAP when last checked (positive = above). */
+  priceDeviationPercent?: number | null;
+  marketVwapAtCheck?: number | null;
   reviewNote?: string | null;
   reviewedBy?: { _id: string; name: string } | null;
   reviewedAt?: string | null;
