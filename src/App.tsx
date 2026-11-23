@@ -21,6 +21,7 @@ import {
   RefreshCw,
   Search,
   ShieldCheck,
+  ClipboardCheck,
   Store,
   ShieldX,
   TrendingUp,
@@ -52,13 +53,14 @@ type Notice = { message: string; tone: "success" | "error" };
 
 const pageMeta: Record<Page, { label: string; description: string }> = {
   overview: { label: "Overview", description: "A clear view of what needs your attention." },
+  // "listings" and "review" are the two tabs of one Review queue page.
   listings: {
-    label: "Listing approval",
+    label: "Review queue",
     description: "New flower posts stay hidden from farmers and buyers until you approve them.",
   },
   review: {
-    label: "Sale review",
-    description: "Review deal prices that were far from the market index before they count.",
+    label: "Review queue",
+    description: "Sales priced far from the market index don't count until you approve them.",
   },
   history: {
     label: "Sale records",
@@ -73,8 +75,7 @@ const pageMeta: Record<Page, { label: string; description: string }> = {
 
 const navItems: { page: Page; icon: typeof LayoutDashboard }[] = [
   { page: "overview", icon: LayoutDashboard },
-  { page: "listings", icon: Store },
-  { page: "review", icon: CircleDollarSign },
+  { page: "listings", icon: ClipboardCheck },
   { page: "history", icon: TrendingUp },
   { page: "verifications", icon: BadgeCheck },
   { page: "members", icon: Users },
@@ -225,8 +226,9 @@ export default function App() {
             </span>
           </div>
           {page === "overview" ? <Overview onNavigate={setPage} notify={notify} /> : null}
-          {page === "listings" ? <ListingsReviewPage notify={notify} /> : null}
-          {page === "review" ? <ReviewPage notify={notify} /> : null}
+          {page === "listings" || page === "review" ? (
+            <ReviewQueue tab={page} onTab={setPage} notify={notify} />
+          ) : null}
           {page === "history" ? <HistoryPage /> : null}
           {page === "verifications" ? <VerificationsPage notify={notify} /> : null}
           {page === "members" ? <MembersPage notify={notify} /> : null}
@@ -364,6 +366,8 @@ function Sidebar({
   onNavigate: (page: Page) => void;
   onSignOut: () => void;
 }) {
+  // Both review tabs highlight the single "Review queue" entry.
+  const current = active === "review" ? "listings" : active;
   return (
     <aside className={`sidebar ${open ? "sidebar-open" : ""}`}>
       <a
@@ -386,9 +390,9 @@ function Sidebar({
         {navItems.map(({ page, icon: Icon }) => (
           <button
             key={page}
-            className={`nav-link ${active === page ? "nav-link-active" : ""}`}
+            className={`nav-link ${current === page ? "nav-link-active" : ""}`}
             aria-label={pageMeta[page].label}
-            aria-current={active === page ? "page" : undefined}
+            aria-current={current === page ? "page" : undefined}
             onClick={() => onNavigate(page)}
           >
             <Icon size={19} strokeWidth={1.8} />
@@ -814,7 +818,82 @@ function MetricCard({
   );
 }
 
-function ReviewPage({ notify }: { notify: (message: string, tone?: Notice["tone"]) => void }) {
+/** One page for everything waiting on an admin: new listings and flagged sales, as two tabs. */
+function ReviewQueue({
+  tab,
+  onTab,
+  notify,
+}: {
+  tab: "listings" | "review";
+  onTab: (page: Page) => void;
+  notify: (message: string, tone?: Notice["tone"]) => void;
+}) {
+  const [counts, setCounts] = useState<{ listings: number; sales: number } | null>(null);
+  const [version, setVersion] = useState(0);
+  const refreshCounts = useCallback(() => setVersion((value) => value + 1), []);
+
+  useEffect(() => {
+    let active = true;
+    Promise.all([adminApi.listingReviews("pending", 1), adminApi.pendingTransactions()])
+      .then(([listings, sales]) => {
+        if (active)
+          setCounts({ listings: listings.pagination.total, sales: sales.transactions.length });
+      })
+      .catch(() => {
+        // Each tab shows its own load error; the counts just stay hidden.
+      });
+    return () => {
+      active = false;
+    };
+  }, [version]);
+
+  const tabs = [
+    { page: "listings" as const, label: "New listings", icon: Store, count: counts?.listings },
+    {
+      page: "review" as const,
+      label: "Flagged sales",
+      icon: CircleDollarSign,
+      count: counts?.sales,
+    },
+  ];
+
+  return (
+    <div className="stack-md">
+      <div className="review-switch" role="tablist" aria-label="What to review">
+        {tabs.map(({ page, label, icon: Icon, count }) => (
+          <button
+            key={page}
+            role="tab"
+            aria-selected={tab === page}
+            className={tab === page ? "review-switch-tab active" : "review-switch-tab"}
+            onClick={() => onTab(page)}
+          >
+            <Icon size={17} />
+            <span>{label}</span>
+            {count !== undefined ? (
+              <span className={count ? "review-switch-count waiting" : "review-switch-count"}>
+                {count}
+              </span>
+            ) : null}
+          </button>
+        ))}
+      </div>
+      {tab === "listings" ? (
+        <ListingsReviewPage notify={notify} onChange={refreshCounts} />
+      ) : (
+        <ReviewPage notify={notify} onChange={refreshCounts} />
+      )}
+    </div>
+  );
+}
+
+function ReviewPage({
+  notify,
+  onChange,
+}: {
+  notify: (message: string, tone?: Notice["tone"]) => void;
+  onChange?: () => void;
+}) {
   const [items, setItems] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -854,6 +933,7 @@ function ReviewPage({ notify }: { notify: (message: string, tone?: Notice["tone"
       await adminApi.reviewTransaction(item._id, decision);
       setItems((current) => current.filter((entry) => entry._id !== item._id));
       notify(`Sale ${decision === "approve" ? "approved" : "rejected"}.`);
+      onChange?.();
     } catch (reason) {
       notify(
         reason instanceof Error ? reason.message : `Could not ${action.toLowerCase()} this sale.`,
@@ -1089,8 +1169,10 @@ function HistoryPage() {
 
 function ListingsReviewPage({
   notify,
+  onChange,
 }: {
   notify: (message: string, tone?: Notice["tone"]) => void;
+  onChange?: () => void;
 }) {
   const [status, setStatus] = useState<ListingReviewStatus>("pending");
   const [page, setPage] = useState(1);
@@ -1148,6 +1230,7 @@ function ListingsReviewPage({
       setRejecting(null);
       setReason("");
       setReload((value) => value + 1);
+      onChange?.();
     } catch (cause) {
       notify(cause instanceof Error ? cause.message : "Could not review this listing.", "error");
     } finally {
