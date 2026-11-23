@@ -593,7 +593,7 @@ a {
 }
 .metric-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 14px;
 }
 .metric-card {
@@ -1256,6 +1256,13 @@ td strong {
   color: #849087;
   font-size: 9px;
 }
+.listing-description {
+  margin: 12px 0 0;
+  color: #3e5146;
+  font-size: 11px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
 .verification-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1790,15 +1797,21 @@ td strong {
   font-size: 12px;
   line-height: 1.6;
 }
-.input-wrap {
+.field > .input-wrap {
   position: relative;
-  display: flex;
-  align-items: center;
+  display: block;
 }
 .input-wrap > svg {
   position: absolute;
-  left: 12px;
+  top: 50%;
+  left: 13px;
+  z-index: 1;
+  transform: translateY(-50%);
   color: #7e8e83;
+  pointer-events: none;
+}
+.input-wrap:focus-within > svg {
+  color: #14513b;
 }
 .input-wrap input {
   padding-left: 38px !important;
@@ -1844,6 +1857,9 @@ td strong {
 }
 
 @media (max-width: 1120px) {
+  .metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
   .sidebar {
     width: 225px;
   }

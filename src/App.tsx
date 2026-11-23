@@ -21,6 +21,7 @@ import {
   RefreshCw,
   Search,
   ShieldCheck,
+  Store,
   ShieldX,
   TrendingUp,
   UserRound,
@@ -38,17 +39,23 @@ import {
   submitterName,
   type AdminNotification,
   type AdminUser,
+  type ListingReviewStatus,
+  type ReviewListing,
   type Transaction,
   type TransactionStatus,
   type VerificationStatus,
   type VerificationUser,
 } from "./api";
 
-type Page = "overview" | "review" | "history" | "verifications" | "members";
+type Page = "overview" | "listings" | "review" | "history" | "verifications" | "members";
 type Notice = { message: string; tone: "success" | "error" };
 
 const pageMeta: Record<Page, { label: string; description: string }> = {
   overview: { label: "Overview", description: "A clear view of what needs your attention." },
+  listings: {
+    label: "Listing approval",
+    description: "New flower posts stay hidden from farmers and buyers until you approve them.",
+  },
   review: {
     label: "Sale review",
     description: "Review deal prices that were far from the market index before they count.",
@@ -66,6 +73,7 @@ const pageMeta: Record<Page, { label: string; description: string }> = {
 
 const navItems: { page: Page; icon: typeof LayoutDashboard }[] = [
   { page: "overview", icon: LayoutDashboard },
+  { page: "listings", icon: Store },
   { page: "review", icon: CircleDollarSign },
   { page: "history", icon: TrendingUp },
   { page: "verifications", icon: BadgeCheck },
@@ -217,6 +225,7 @@ export default function App() {
             </span>
           </div>
           {page === "overview" ? <Overview onNavigate={setPage} notify={notify} /> : null}
+          {page === "listings" ? <ListingsReviewPage notify={notify} /> : null}
           {page === "review" ? <ReviewPage notify={notify} /> : null}
           {page === "history" ? <HistoryPage /> : null}
           {page === "verifications" ? <VerificationsPage notify={notify} /> : null}
@@ -410,6 +419,7 @@ function Sidebar({
 /** Where an admin notification leads. The backend sends admins these two types (see utils/notify.js callers). */
 function notificationPage(item: AdminNotification): Page | null {
   if (item.type === "verification_pending") return "verifications";
+  if (item.type === "listing_pending") return "listings";
   if (item.type === "transaction_flagged") return "review";
   return null;
 }
@@ -582,7 +592,7 @@ function NotificationBell({ onNavigate }: { onNavigate: (page: Page) => void }) 
             <EmptyState
               icon={Bell}
               title="No notifications"
-              body="New verifications and flagged sales will appear here."
+              body="New listings, verifications and flagged sales will appear here."
             />
           ) : null}
         </section>
@@ -682,6 +692,13 @@ function Overview({
         </button>
       </div>
       <div className="metric-grid">
+        <MetricCard
+          label="Listings to approve"
+          value={loading ? "—" : (data?.pendingListings ?? 0)}
+          icon={Store}
+          accent="green"
+          onClick={() => onNavigate("listings")}
+        />
         <MetricCard
           label="Sales to review"
           value={loading ? "—" : (data?.pendingTransactions.length ?? 0)}
@@ -1067,6 +1084,292 @@ function HistoryPage() {
       ) : null}
       <Pagination page={page} pages={pages} total={total} pageSize={30} onChange={setPage} />
     </section>
+  );
+}
+
+function ListingsReviewPage({
+  notify,
+}: {
+  notify: (message: string, tone?: Notice["tone"]) => void;
+}) {
+  const [status, setStatus] = useState<ListingReviewStatus>("pending");
+  const [page, setPage] = useState(1);
+  const [items, setItems] = useState<ReviewListing[]>([]);
+  const [pages, setPages] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [reload, setReload] = useState(0);
+  const [busyId, setBusyId] = useState("");
+  const [rejecting, setRejecting] = useState<ReviewListing | null>(null);
+  const [reason, setReason] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError("");
+    adminApi
+      .listingReviews(status, page)
+      .then((result) => {
+        if (!active) return;
+        setItems(result.listings);
+        setPages(result.pagination.pages);
+        setTotal(result.pagination.total);
+      })
+      .catch((cause) => {
+        if (active) setError(cause instanceof Error ? cause.message : "Unable to load listings.");
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [status, page, reload]);
+
+  const chooseStatus = (next: ListingReviewStatus) => {
+    setStatus(next);
+    setPage(1);
+  };
+
+  const decide = async (
+    item: ReviewListing,
+    decision: "approve" | "reject",
+    rejectionReason?: string
+  ) => {
+    setBusyId(item._id);
+    try {
+      await adminApi.reviewListing(item._id, decision, rejectionReason);
+      notify(
+        decision === "approve"
+          ? `${item.flowerVariety} listing approved. It is now live.`
+          : `${item.flowerVariety} listing rejected.`
+      );
+      setRejecting(null);
+      setReason("");
+      setReload((value) => value + 1);
+    } catch (cause) {
+      notify(cause instanceof Error ? cause.message : "Could not review this listing.", "error");
+    } finally {
+      setBusyId("");
+    }
+  };
+
+  const submitRejection = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!rejecting || !reason.trim() || reason.trim().length > 300) return;
+    void decide(rejecting, "reject", reason.trim());
+  };
+
+  return (
+    <div className="stack-md">
+      <div className="filter-tabs" role="tablist" aria-label="Listing review status">
+        {(["pending", "approved", "rejected"] as const).map((value) => (
+          <button
+            key={value}
+            role="tab"
+            aria-selected={status === value}
+            className={status === value ? "filter-tab active" : "filter-tab"}
+            onClick={() => chooseStatus(value)}
+          >
+            {value === "pending" ? "Waiting approval" : capitalize(value)}
+          </button>
+        ))}
+        <button
+          className="icon-button filter-refresh"
+          aria-label="Refresh listing queue"
+          onClick={() => setReload((value) => value + 1)}
+        >
+          <RefreshCw size={17} />
+        </button>
+      </div>
+      {error ? (
+        <ErrorPanel message={error} onRetry={() => setReload((value) => value + 1)} />
+      ) : null}
+      {loading ? (
+        <div className="verification-grid">
+          <LoadingCard />
+          <LoadingCard />
+        </div>
+      ) : items.length ? (
+        <div className="verification-grid">
+          {items.map((item) => (
+            <ListingReviewCard
+              key={item._id}
+              item={item}
+              status={status}
+              busy={busyId === item._id}
+              onApprove={() => void decide(item, "approve")}
+              onReject={() => {
+                setRejecting(item);
+                setReason("");
+              }}
+            />
+          ))}
+        </div>
+      ) : !error ? (
+        <EmptyState
+          icon={Store}
+          title={status === "pending" ? "No listings waiting" : `No ${status} listings`}
+          body={
+            status === "pending"
+              ? "New flower posts from farmers and buyers will appear here for approval."
+              : `There are no ${status} listings.`
+          }
+        />
+      ) : null}
+      <Pagination page={page} pages={pages} total={total} onChange={setPage} />
+      {rejecting ? (
+        <Modal
+          title={`Reject ${rejecting.flowerVariety} listing`}
+          onClose={() => setRejecting(null)}
+        >
+          <form className="stack-md" onSubmit={submitRejection}>
+            <p className="muted">
+              The listing stays hidden from the marketplace. The member sees this reason in the app
+              and can edit the listing to send it back for review.
+            </p>
+            <label className="field">
+              <span>
+                Reason <small>Required · up to 300 characters</small>
+              </span>
+              <textarea
+                value={reason}
+                onChange={(event) => setReason(event.target.value)}
+                maxLength={300}
+                rows={4}
+                placeholder="e.g. The photo doesn't show the flowers being sold…"
+                required
+              />
+            </label>
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="button button-quiet"
+                onClick={() => setRejecting(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="button button-danger"
+                disabled={!reason.trim() || busyId === rejecting._id}
+              >
+                {busyId === rejecting._id ? "Submitting…" : "Reject listing"}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      ) : null}
+    </div>
+  );
+}
+
+function ListingReviewCard({
+  item,
+  status,
+  busy,
+  onApprove,
+  onReject,
+}: {
+  item: ReviewListing;
+  status: ListingReviewStatus;
+  busy: boolean;
+  onApprove: () => void;
+  onReject: () => void;
+}) {
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const imageSrc = item.imageUrl ? adminApi.listingImageSrc(item.imageUrl) : "";
+  const poster = item.postedBy;
+  const kind = item.type === "sell" ? "For sale" : "In demand";
+
+  return (
+    <article className="verification-card">
+      <div className="document-frame">
+        {imageSrc ? (
+          <button
+            type="button"
+            className="document-preview-trigger"
+            aria-label={`Preview the ${item.flowerVariety} photo`}
+            onClick={() => setPreviewOpen(true)}
+          >
+            <img src={imageSrc} alt={`${item.flowerVariety} listing photo`} />
+          </button>
+        ) : (
+          <div className="document-placeholder">
+            <Flower2 size={25} />
+            <span>No photo attached</span>
+          </div>
+        )}
+      </div>
+      <div className="verification-body">
+        <div className="verification-title">
+          <div>
+            <h3>{item.flowerVariety}</h3>
+            <span>
+              {kind} · {formatNumber(item.quantity)} dozen
+              {item.pricePerUnit != null
+                ? ` · ${formatCurrency(item.pricePerUnit)} per dozen`
+                : " · Open price"}
+            </span>
+          </div>
+          <StatusBadge status={item.reviewStatus ?? "approved"} />
+        </div>
+        <div className="verification-meta">
+          <span>
+            <UserRound size={14} />
+            {poster
+              ? `${poster.name} (${poster.role === "farmer" ? "Farmer" : "Buyer"})`
+              : "Deleted member"}
+          </span>
+          {poster?.email ? (
+            <span>
+              <Mail size={14} />
+              {poster.email}
+            </span>
+          ) : null}
+        </div>
+        <div className="location-line">
+          <MapPin size={14} />
+          {item.location}
+          {item.status !== "active" ? <span>{capitalize(item.status)}</span> : null}
+        </div>
+        {item.description ? <p className="listing-description">{item.description}</p> : null}
+        {item.reviewNote ? <p className="review-note">{item.reviewNote}</p> : null}
+        <p className="submitted-date">
+          Posted {formatDate(item.createdAt)}
+          {item.reviewedAt && status !== "pending"
+            ? ` · Reviewed ${formatDate(item.reviewedAt)}${item.reviewedBy ? ` by ${item.reviewedBy.name}` : ""}`
+            : ""}
+        </p>
+        {status === "pending" ? (
+          <div className="verification-actions">
+            <button className="button button-danger-soft" disabled={busy} onClick={onReject}>
+              <X size={16} /> Reject
+            </button>
+            <button className="button button-primary" disabled={busy} onClick={onApprove}>
+              <Check size={16} /> Approve listing
+            </button>
+          </div>
+        ) : status === "rejected" ? (
+          <div className="verification-actions">
+            <button className="button button-primary" disabled={busy} onClick={onApprove}>
+              <Check size={16} /> Approve anyway
+            </button>
+          </div>
+        ) : null}
+      </div>
+      {previewOpen && imageSrc ? (
+        <Modal
+          title={`${item.flowerVariety} photo`}
+          className="document-preview-modal"
+          onClose={() => setPreviewOpen(false)}
+        >
+          <div className="document-preview-image">
+            <img src={imageSrc} alt={`${item.flowerVariety} listing photo`} />
+          </div>
+        </Modal>
+      ) : null}
+    </article>
   );
 }
 
