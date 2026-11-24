@@ -21,8 +21,6 @@ import {
   RefreshCw,
   Search,
   ShieldCheck,
-  ClipboardCheck,
-  Store,
   ShieldX,
   TrendingUp,
   UserRound,
@@ -40,28 +38,20 @@ import {
   submitterName,
   type AdminNotification,
   type AdminUser,
-  type ListingReviewStatus,
-  type ReviewListing,
   type Transaction,
   type TransactionStatus,
   type VerificationStatus,
   type VerificationUser,
 } from "./api";
 
-type Page = "overview" | "listings" | "review" | "history" | "verifications" | "members";
+type Page = "overview" | "review" | "history" | "verifications" | "members";
 type Notice = { message: string; tone: "success" | "error" };
 
 const pageMeta: Record<Page, { label: string; description: string }> = {
   overview: { label: "Overview", description: "A clear view of what needs your attention." },
-  // "listings" and "review" are the two tabs of one Review queue page.
-  listings: {
-    label: "Review queue",
-    description:
-      "Posts priced far above or below the market price stay hidden until you review them.",
-  },
   review: {
-    label: "Review queue",
-    description: "Sales priced far from the market index don't count until you approve them.",
+    label: "Sale review",
+    description: "Review deal prices that were far from the market index before they count.",
   },
   history: {
     label: "Sale records",
@@ -76,7 +66,7 @@ const pageMeta: Record<Page, { label: string; description: string }> = {
 
 const navItems: { page: Page; icon: typeof LayoutDashboard }[] = [
   { page: "overview", icon: LayoutDashboard },
-  { page: "listings", icon: ClipboardCheck },
+  { page: "review", icon: CircleDollarSign },
   { page: "history", icon: TrendingUp },
   { page: "verifications", icon: BadgeCheck },
   { page: "members", icon: Users },
@@ -227,9 +217,7 @@ export default function App() {
             </span>
           </div>
           {page === "overview" ? <Overview onNavigate={setPage} notify={notify} /> : null}
-          {page === "listings" || page === "review" ? (
-            <ReviewQueue tab={page} onTab={setPage} notify={notify} />
-          ) : null}
+          {page === "review" ? <ReviewPage notify={notify} /> : null}
           {page === "history" ? <HistoryPage /> : null}
           {page === "verifications" ? <VerificationsPage notify={notify} /> : null}
           {page === "members" ? <MembersPage notify={notify} /> : null}
@@ -367,8 +355,6 @@ function Sidebar({
   onNavigate: (page: Page) => void;
   onSignOut: () => void;
 }) {
-  // Both review tabs highlight the single "Review queue" entry.
-  const current = active === "review" ? "listings" : active;
   return (
     <aside className={`sidebar ${open ? "sidebar-open" : ""}`}>
       <a
@@ -391,9 +377,9 @@ function Sidebar({
         {navItems.map(({ page, icon: Icon }) => (
           <button
             key={page}
-            className={`nav-link ${current === page ? "nav-link-active" : ""}`}
+            className={`nav-link ${active === page ? "nav-link-active" : ""}`}
             aria-label={pageMeta[page].label}
-            aria-current={current === page ? "page" : undefined}
+            aria-current={active === page ? "page" : undefined}
             onClick={() => onNavigate(page)}
           >
             <Icon size={19} strokeWidth={1.8} />
@@ -424,7 +410,6 @@ function Sidebar({
 /** Where an admin notification leads. The backend sends admins these two types (see utils/notify.js callers). */
 function notificationPage(item: AdminNotification): Page | null {
   if (item.type === "verification_pending") return "verifications";
-  if (item.type === "listing_pending") return "listings";
   if (item.type === "transaction_flagged") return "review";
   return null;
 }
@@ -597,7 +582,7 @@ function NotificationBell({ onNavigate }: { onNavigate: (page: Page) => void }) 
             <EmptyState
               icon={Bell}
               title="No notifications"
-              body="Flagged listings, verifications and flagged sales will appear here."
+              body="New verifications and flagged sales will appear here."
             />
           ) : null}
         </section>
@@ -697,13 +682,6 @@ function Overview({
         </button>
       </div>
       <div className="metric-grid">
-        <MetricCard
-          label="Flagged listings"
-          value={loading ? "—" : (data?.pendingListings ?? 0)}
-          icon={Store}
-          accent="green"
-          onClick={() => onNavigate("listings")}
-        />
         <MetricCard
           label="Sales to review"
           value={loading ? "—" : (data?.pendingTransactions.length ?? 0)}
@@ -819,82 +797,7 @@ function MetricCard({
   );
 }
 
-/** One page for everything waiting on an admin: new listings and flagged sales, as two tabs. */
-function ReviewQueue({
-  tab,
-  onTab,
-  notify,
-}: {
-  tab: "listings" | "review";
-  onTab: (page: Page) => void;
-  notify: (message: string, tone?: Notice["tone"]) => void;
-}) {
-  const [counts, setCounts] = useState<{ listings: number; sales: number } | null>(null);
-  const [version, setVersion] = useState(0);
-  const refreshCounts = useCallback(() => setVersion((value) => value + 1), []);
-
-  useEffect(() => {
-    let active = true;
-    Promise.all([adminApi.listingReviews("pending", 1), adminApi.pendingTransactions()])
-      .then(([listings, sales]) => {
-        if (active)
-          setCounts({ listings: listings.pagination.total, sales: sales.transactions.length });
-      })
-      .catch(() => {
-        // Each tab shows its own load error; the counts just stay hidden.
-      });
-    return () => {
-      active = false;
-    };
-  }, [version]);
-
-  const tabs = [
-    { page: "listings" as const, label: "Flagged listings", icon: Store, count: counts?.listings },
-    {
-      page: "review" as const,
-      label: "Flagged sales",
-      icon: CircleDollarSign,
-      count: counts?.sales,
-    },
-  ];
-
-  return (
-    <div className="stack-md">
-      <div className="review-switch" role="tablist" aria-label="What to review">
-        {tabs.map(({ page, label, icon: Icon, count }) => (
-          <button
-            key={page}
-            role="tab"
-            aria-selected={tab === page}
-            className={tab === page ? "review-switch-tab active" : "review-switch-tab"}
-            onClick={() => onTab(page)}
-          >
-            <Icon size={17} />
-            <span>{label}</span>
-            {count !== undefined ? (
-              <span className={count ? "review-switch-count waiting" : "review-switch-count"}>
-                {count}
-              </span>
-            ) : null}
-          </button>
-        ))}
-      </div>
-      {tab === "listings" ? (
-        <ListingsReviewPage notify={notify} onChange={refreshCounts} />
-      ) : (
-        <ReviewPage notify={notify} onChange={refreshCounts} />
-      )}
-    </div>
-  );
-}
-
-function ReviewPage({
-  notify,
-  onChange,
-}: {
-  notify: (message: string, tone?: Notice["tone"]) => void;
-  onChange?: () => void;
-}) {
+function ReviewPage({ notify }: { notify: (message: string, tone?: Notice["tone"]) => void }) {
   const [items, setItems] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -934,7 +837,6 @@ function ReviewPage({
       await adminApi.reviewTransaction(item._id, decision);
       setItems((current) => current.filter((entry) => entry._id !== item._id));
       notify(`Sale ${decision === "approve" ? "approved" : "rejected"}.`);
-      onChange?.();
     } catch (reason) {
       notify(
         reason instanceof Error ? reason.message : `Could not ${action.toLowerCase()} this sale.`,
@@ -1165,306 +1067,6 @@ function HistoryPage() {
       ) : null}
       <Pagination page={page} pages={pages} total={total} pageSize={30} onChange={setPage} />
     </section>
-  );
-}
-
-function ListingsReviewPage({
-  notify,
-  onChange,
-}: {
-  notify: (message: string, tone?: Notice["tone"]) => void;
-  onChange?: () => void;
-}) {
-  const [status, setStatus] = useState<ListingReviewStatus>("pending");
-  const [page, setPage] = useState(1);
-  const [items, setItems] = useState<ReviewListing[]>([]);
-  const [pages, setPages] = useState(1);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-  const [reload, setReload] = useState(0);
-  const [busyId, setBusyId] = useState("");
-  const [rejecting, setRejecting] = useState<ReviewListing | null>(null);
-  const [reason, setReason] = useState("");
-
-  useEffect(() => {
-    let active = true;
-    setLoading(true);
-    setError("");
-    adminApi
-      .listingReviews(status, page)
-      .then((result) => {
-        if (!active) return;
-        setItems(result.listings);
-        setPages(result.pagination.pages);
-        setTotal(result.pagination.total);
-      })
-      .catch((cause) => {
-        if (active) setError(cause instanceof Error ? cause.message : "Unable to load listings.");
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, [status, page, reload]);
-
-  const chooseStatus = (next: ListingReviewStatus) => {
-    setStatus(next);
-    setPage(1);
-  };
-
-  const decide = async (
-    item: ReviewListing,
-    decision: "approve" | "reject",
-    rejectionReason?: string
-  ) => {
-    setBusyId(item._id);
-    try {
-      await adminApi.reviewListing(item._id, decision, rejectionReason);
-      notify(
-        decision === "approve"
-          ? `${item.flowerVariety} listing approved. It is now live.`
-          : `${item.flowerVariety} listing rejected.`
-      );
-      setRejecting(null);
-      setReason("");
-      setReload((value) => value + 1);
-      onChange?.();
-    } catch (cause) {
-      notify(cause instanceof Error ? cause.message : "Could not review this listing.", "error");
-    } finally {
-      setBusyId("");
-    }
-  };
-
-  const submitRejection = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!rejecting || !reason.trim() || reason.trim().length > 300) return;
-    void decide(rejecting, "reject", reason.trim());
-  };
-
-  return (
-    <div className="stack-md">
-      <div className="filter-tabs" role="tablist" aria-label="Listing review status">
-        {(["pending", "approved", "rejected"] as const).map((value) => (
-          <button
-            key={value}
-            role="tab"
-            aria-selected={status === value}
-            className={status === value ? "filter-tab active" : "filter-tab"}
-            onClick={() => chooseStatus(value)}
-          >
-            {value === "pending" ? "Waiting review" : capitalize(value)}
-          </button>
-        ))}
-        <button
-          className="icon-button filter-refresh"
-          aria-label="Refresh listing queue"
-          onClick={() => setReload((value) => value + 1)}
-        >
-          <RefreshCw size={17} />
-        </button>
-      </div>
-      {error ? (
-        <ErrorPanel message={error} onRetry={() => setReload((value) => value + 1)} />
-      ) : null}
-      {loading ? (
-        <div className="verification-grid">
-          <LoadingCard />
-          <LoadingCard />
-        </div>
-      ) : items.length ? (
-        <div className="verification-grid">
-          {items.map((item) => (
-            <ListingReviewCard
-              key={item._id}
-              item={item}
-              status={status}
-              busy={busyId === item._id}
-              onApprove={() => void decide(item, "approve")}
-              onReject={() => {
-                setRejecting(item);
-                setReason("");
-              }}
-            />
-          ))}
-        </div>
-      ) : !error ? (
-        <EmptyState
-          icon={Store}
-          title={status === "pending" ? "No flagged listings" : `No ${status} listings`}
-          body={
-            status === "pending"
-              ? "Listings priced far above or below the market price will appear here."
-              : `No flagged listings have been ${status} yet.`
-          }
-        />
-      ) : null}
-      <Pagination page={page} pages={pages} total={total} onChange={setPage} />
-      {rejecting ? (
-        <Modal
-          title={`Reject ${rejecting.flowerVariety} listing`}
-          onClose={() => setRejecting(null)}
-        >
-          <form className="stack-md" onSubmit={submitRejection}>
-            <p className="muted">
-              The listing stays hidden from the marketplace. The member sees this reason in the app;
-              once they fix the price it goes live again.
-            </p>
-            <label className="field">
-              <span>
-                Reason <small>Required · up to 300 characters</small>
-              </span>
-              <textarea
-                value={reason}
-                onChange={(event) => setReason(event.target.value)}
-                maxLength={300}
-                rows={4}
-                placeholder="e.g. The photo doesn't show the flowers being sold…"
-                required
-              />
-            </label>
-            <div className="modal-actions">
-              <button
-                type="button"
-                className="button button-quiet"
-                onClick={() => setRejecting(null)}
-              >
-                Cancel
-              </button>
-              <button
-                className="button button-danger"
-                disabled={!reason.trim() || busyId === rejecting._id}
-              >
-                {busyId === rejecting._id ? "Submitting…" : "Reject listing"}
-              </button>
-            </div>
-          </form>
-        </Modal>
-      ) : null}
-    </div>
-  );
-}
-
-function ListingReviewCard({
-  item,
-  status,
-  busy,
-  onApprove,
-  onReject,
-}: {
-  item: ReviewListing;
-  status: ListingReviewStatus;
-  busy: boolean;
-  onApprove: () => void;
-  onReject: () => void;
-}) {
-  const [previewOpen, setPreviewOpen] = useState(false);
-  const imageSrc = item.imageUrl ? adminApi.listingImageSrc(item.imageUrl) : "";
-  const poster = item.postedBy;
-  const kind = item.type === "sell" ? "For sale" : "In demand";
-
-  return (
-    <article className="verification-card">
-      <div className="document-frame">
-        {imageSrc ? (
-          <button
-            type="button"
-            className="document-preview-trigger"
-            aria-label={`Preview the ${item.flowerVariety} photo`}
-            onClick={() => setPreviewOpen(true)}
-          >
-            <img src={imageSrc} alt={`${item.flowerVariety} listing photo`} />
-          </button>
-        ) : (
-          <div className="document-placeholder">
-            <Flower2 size={25} />
-            <span>No photo attached</span>
-          </div>
-        )}
-      </div>
-      <div className="verification-body">
-        <div className="verification-title">
-          <div>
-            <h3>{item.flowerVariety}</h3>
-            <span>
-              {kind} · {formatNumber(item.quantity)} dozen
-              {item.pricePerUnit != null
-                ? ` · ${formatCurrency(item.pricePerUnit)} per dozen`
-                : " · Open price"}
-            </span>
-          </div>
-          <StatusBadge status={item.reviewStatus ?? "approved"} />
-        </div>
-        <div className="verification-meta">
-          <span>
-            <UserRound size={14} />
-            {poster
-              ? `${poster.name} (${poster.role === "farmer" ? "Farmer" : "Buyer"})`
-              : "Deleted member"}
-          </span>
-          {poster?.email ? (
-            <span>
-              <Mail size={14} />
-              {poster.email}
-            </span>
-          ) : null}
-        </div>
-        <div className="location-line">
-          <MapPin size={14} />
-          {item.location}
-          {item.status !== "active" ? <span>{capitalize(item.status)}</span> : null}
-        </div>
-        {item.priceDeviationPercent != null && item.marketVwapAtCheck != null ? (
-          <p
-            className={`price-flag ${item.priceDeviationPercent > 0 ? "price-flag-above" : "price-flag-below"}`}
-          >
-            <strong>
-              {formatNumber(Math.abs(item.priceDeviationPercent))}%{" "}
-              {item.priceDeviationPercent > 0 ? "above" : "below"} market
-            </strong>
-            <span>Market price {formatCurrency(item.marketVwapAtCheck)} per dozen</span>
-          </p>
-        ) : null}
-        {item.description ? <p className="listing-description">{item.description}</p> : null}
-        {item.reviewNote ? <p className="review-note">{item.reviewNote}</p> : null}
-        <p className="submitted-date">
-          Posted {formatDate(item.createdAt)}
-          {item.reviewedAt && status !== "pending"
-            ? ` · Reviewed ${formatDate(item.reviewedAt)}${item.reviewedBy ? ` by ${item.reviewedBy.name}` : ""}`
-            : ""}
-        </p>
-        {status === "pending" ? (
-          <div className="verification-actions">
-            <button className="button button-danger-soft" disabled={busy} onClick={onReject}>
-              <X size={16} /> Reject
-            </button>
-            <button className="button button-primary" disabled={busy} onClick={onApprove}>
-              <Check size={16} /> Approve listing
-            </button>
-          </div>
-        ) : status === "rejected" ? (
-          <div className="verification-actions">
-            <button className="button button-primary" disabled={busy} onClick={onApprove}>
-              <Check size={16} /> Approve anyway
-            </button>
-          </div>
-        ) : null}
-      </div>
-      {previewOpen && imageSrc ? (
-        <Modal
-          title={`${item.flowerVariety} photo`}
-          className="document-preview-modal"
-          onClose={() => setPreviewOpen(false)}
-        >
-          <div className="document-preview-image">
-            <img src={imageSrc} alt={`${item.flowerVariety} listing photo`} />
-          </div>
-        </Modal>
-      ) : null}
-    </article>
   );
 }
 

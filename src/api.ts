@@ -52,39 +52,6 @@ export interface VerificationUser extends AdminUser {
   documentUrl: string | null;
 }
 
-export type ListingReviewStatus = "pending" | "approved" | "rejected";
-
-/** A marketplace post in the admin review queue. */
-export interface ReviewListing {
-  _id: string;
-  postedBy: {
-    _id: string;
-    name: string;
-    email?: string;
-    role: Role;
-    farmLocation?: string | null;
-    businessLocation?: string | null;
-    buyerCategory?: string | null;
-  } | null;
-  type: "sell" | "request";
-  flowerVariety: string;
-  quantity: number;
-  pricePerUnit: number | null;
-  location: string;
-  description?: string;
-  imageUrl: string | null;
-  status: "active" | "fulfilled" | "cancelled";
-  /** "pending" = flagged by the price check and hidden until reviewed. */
-  reviewStatus?: ListingReviewStatus;
-  /** Signed % from the market VWAP when last checked (positive = above). */
-  priceDeviationPercent?: number | null;
-  marketVwapAtCheck?: number | null;
-  reviewNote?: string | null;
-  reviewedBy?: { _id: string; name: string } | null;
-  reviewedAt?: string | null;
-  createdAt: string;
-}
-
 export interface UserActivity {
   activeListings: number;
   transactions: Record<string, number>;
@@ -98,7 +65,6 @@ export interface AdminNotification {
   body: string;
   transaction?: string;
   subject?: string;
-  listing?: string;
   count?: number;
   isRead: boolean;
   updatedAt: string;
@@ -202,20 +168,16 @@ export const adminApi = {
   me: () => request<{ user: AdminUser }>("/auth/me"),
 
   dashboard: async () => {
-    const [transactions, verifications, listings, users] = await Promise.all([
+    const [transactions, verifications, users] = await Promise.all([
       request<{ transactions: Transaction[] }>("/transactions/pending"),
       request<{ users: VerificationUser[]; pagination: Pagination }>(
         "/admin/verifications?status=pending&limit=1"
-      ),
-      request<{ listings: ReviewListing[]; pagination: Pagination }>(
-        "/admin/listings?reviewStatus=pending&limit=1"
       ),
       request<{ users: AdminUser[]; pagination: Pagination }>("/admin/users?limit=1"),
     ]);
     return {
       pendingTransactions: transactions.transactions,
       pendingVerifications: verifications.pagination.total,
-      pendingListings: listings.pagination.total,
       totalUsers: users.pagination.total,
     };
   },
@@ -243,20 +205,6 @@ export const adminApi = {
       method: "PATCH",
       body: { decision, reason },
     }),
-
-  listingReviews: (reviewStatus: ListingReviewStatus, page: number) =>
-    request<{ listings: ReviewListing[]; pagination: Pagination }>(
-      `/admin/listings${queryString({ reviewStatus, page, limit: 20 })}`
-    ),
-
-  reviewListing: (id: string, decision: "approve" | "reject", reason?: string) =>
-    request<{ listing: ReviewListing }>(`/admin/listings/${id}/review`, {
-      method: "PATCH",
-      body: { decision, reason },
-    }),
-
-  /** Listing photos are served publicly by the API host. */
-  listingImageSrc: (imageUrl: string) => `${API_URL.replace(/\/api$/, "")}${imageUrl}`,
 
   users: (filters: {
     search: string;
